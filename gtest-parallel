@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python2.7
 # Copyright 2017 Google Inc. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,7 +12,77 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import gtest_parallel
 import sys
+import os
+dir = os.path.dirname(os.path.realpath(__file__))
+dir = os.path.join(dir, 'src')
+sys.path.insert(0, dir)
+import gtest_parallel
+
+import xml.etree.ElementTree as ET
+import os
+import platform
+
+class CollectTestResults(gtest_parallel.CollectTestResults):
+    def __init__(self, json_dump_filepath):
+        super(CollectTestResults, self).__init__(json_dump_filepath)
+        self.xml_filepath = os.path.splitext(json_dump_filepath)[0] + '.xml'
+
+    def dump_to_file_and_close(self):
+        super(CollectTestResults, self).dump_to_file_and_close()
+
+        xml_test_results = ET.Element('testsuites')
+
+        xml_test_results.set("name", "All Tests")
+        alltests_time = 0
+        alltests_failures = 0
+        alltests_passes = 0
+
+        results = self.test_results['tests']
+        for result in results:
+            testsuite_elem = ET.SubElement(xml_test_results, "testsuite")
+            testsuite_elem.set("name", result)
+            testsuite_elem.set("hostname", platform.system())
+
+            testcase_count = 0
+            testcase_time = 0
+            testcase_failures = 0
+
+            for testcase in results[result]:
+                testcase_elem = ET.SubElement(testsuite_elem, "testcase")
+                testcase_elem.set("name", testcase)
+                testcase_elem.set("classname", platform.system() + "." + result)
+                testcase_count += 1
+                time = float(results[result][testcase]['times'][0])
+                if time != 0:
+                    time /= 1000.0
+                testcase_elem.set("time", str(time))
+                testcase_time += time
+                # NOTE(tom): explicitly allowing a single PASS to count
+                # In the case where a test is run multiple times, you'll get PASS/FAIL for each
+                # like "FAIL PASS" or "FAIL FAIL"
+                if 'PASS' not in results[result][testcase]['actual']:
+                    failure = ET.SubElement(testcase_elem, "failure")
+                    failure.set("message", "See Jenkins console output for details. Search for \"FAILED TESTS\". " +
+                                "You can also find the failure logs in the Artifacts in the " +
+                                "gtest-parallel-logs/failed subdirectory")
+                    testcase_failures += 1
+
+            testsuite_elem.set("tests", str(testcase_count))
+            testsuite_elem.set("time", str(testcase_time))
+            testsuite_elem.set("failures", str(testcase_failures))
+            alltests_time += testcase_time
+            alltests_failures += testcase_failures
+            alltests_passes += (testcase_count - testcase_failures)
+
+        total_tests = alltests_failures + alltests_passes
+        xml_test_results.set("tests", str(total_tests))
+        xml_test_results.set("failures", str(alltests_failures))
+
+        xml_test_results.set("time", str(alltests_time))
+        tree = ET.ElementTree(xml_test_results)
+        tree.write(self.xml_filepath)
+
+gtest_parallel.CollectTestResults = CollectTestResults
 
 sys.exit(gtest_parallel.main())
